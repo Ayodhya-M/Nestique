@@ -2,17 +2,29 @@ import { normalizeProfile } from './storage.js';
 const lookup = (table, key) => Object.hasOwn(table, key) ? table[key] : undefined;
 
 export const companionCategories = {
-  Lighting: ['Cushions', 'Curtains', 'Vases', 'Throws'],
-  Curtains: ['Cushions', 'Lighting', 'Vases', 'Candles'],
-  Cushions: ['Lighting', 'Throws', 'Candles', 'Vases'],
-  Vases: ['Lighting', 'Cushions', 'Candles', 'Throws'],
-  Mirrors: ['Lighting', 'Candles', 'Vases', 'Planters'],
+  Lighting: ['Cushions', 'Decorative Objects', 'Wall Art'],
+  Curtains: ['Cushions', 'Lighting', 'Throws'],
+  Cushions: ['Lighting', 'Throws', 'Wall Art'],
+  Vases: ['Decorative Trays', 'Candles', 'Wall Art'],
+  Mirrors: ['Lighting', 'Planters', 'Decorative Objects'],
   Baskets: ['Throws', 'Cushions', 'Planters'],
+  Planters: ['Baskets', 'Vases', 'Lighting'],
+  Throws: ['Cushions', 'Lighting', 'Baskets'],
+  'Wall Art': ['Lighting', 'Cushions', 'Decorative Objects'],
+  'Table Décor': ['Vases', 'Candles', 'Decorative Trays'],
+  'Decorative Trays': ['Candles', 'Vases', 'Decorative Objects'],
+  'Decorative Objects': ['Wall Art', 'Decorative Trays', 'Lighting'],
+  Candles: ['Decorative Trays', 'Vases', 'Table Décor'],
   Sofa: ['Cushions', 'Throws', 'Lighting'],
   Table: ['Vases', 'Candles', 'Table Décor'],
   Rug: ['Cushions', 'Lighting', 'Throws'],
   default: ['Lighting', 'Cushions', 'Vases', 'Candles'],
 };
+
+// Editorial room tags, not measurements or physical-fit analysis.
+// Untagged legacy entries remain eligible; browsing is never restricted.
+export const isRoomRelevant = (product, room) => !room || room === 'Multiple Spaces'
+  || !Array.isArray(product.rooms) || !product.rooms.length || product.rooms.includes(room);
 export const toneStyles = { Neutrals: ['Warm Minimal', 'Soft Scandinavian'], Earthy: ['Natural Living', 'Modern Earth'], Elegant: ['Cozy Luxe'], Light: ['Soft Scandinavian'] };
 export const colourToTone = colour => ({ 'Soft Neutrals': 'Neutrals', 'Earth & Clay': 'Earthy', 'Light & Airy': 'Light', 'Rich Neutrals': 'Elegant' }[colour] || 'Neutrals');
 export const toneToColour = tone => ({ Neutrals: 'Soft Neutrals', Earthy: 'Earth & Clay', Light: 'Light & Airy', Elegant: 'Rich Neutrals' }[tone] || '');
@@ -63,7 +75,7 @@ export function ownedContext(ownedItems, catalogue) {
   return { ids, categories };
 }
 
-export function recommendProducts(catalogue, { profile = {}, planItems = [], orders = [], room = profile.room, limit = 4, mode = 'home', excludeIds = [] } = {}) {
+export function recommendProducts(catalogue, { profile = {}, planItems = [], orders = [], room = profile.room, limit = 4, mode = 'home', excludeIds = [], requireRoom = false } = {}) {
   const owned = ownedContext(profile.ownedItems, catalogue);
   const purchases = orders.flatMap(order => order.items.map(item => ({ ...item, room: item.room || order.room })));
   const relevantPurchases = purchases.filter(p => !p.room || !room || room === 'Multiple Spaces' || p.room === room);
@@ -75,7 +87,7 @@ export function recommendProducts(catalogue, { profile = {}, planItems = [], ord
   // Treat the saved range as a room-plan budget, not a minimum/maximum price for each item.
   // Saved purchases already present in a plan count only once through the plan.
   const committed = planItems.reduce((sum, p) => sum + p.price, 0);
-  const candidates = catalogue.filter(p => !excluded.has(p.id)).map((product, index) => {
+  const candidates = catalogue.filter(p => !excluded.has(p.id) && (!requireRoom || isRoomRelevant(p, room))).map((product, index) => {
     const styleMatch = !!profile.style && product.style === profile.style;
     const complement = complements.has(product.category);
     const colourMatch = product.colors.some(c => palette.includes(c));

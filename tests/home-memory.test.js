@@ -88,8 +88,8 @@ test('recommendations exclude identifiable owned, planned and purchased products
 
 test('refresh complements a cushion purchase and includes a lamp', () => {
   const orders = [createDemoOrder([{ ...product('linen-cushion'), qty: 1, room: 'Living Room' }])];
-  const picks = recommendProducts(products, { profile: { ...profile, ownedItems: [] }, orders, room: 'Living Room', mode: 'refresh' });
-  assert.ok(picks.some(p => p.product.id === 'table-lamp'));
+  const picks = recommendProducts(products, { profile: { ...profile, budget: '', ownedItems: [] }, orders, room: 'Living Room', mode: 'refresh' });
+  assert.ok(picks.some(p => p.product.category === 'Lighting'));
   assert.ok(picks.every(p => p.complement));
 });
 

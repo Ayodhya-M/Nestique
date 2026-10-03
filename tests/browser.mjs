@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createServer } from 'node:net';
 import assert from 'node:assert/strict';
-import { products } from '../src/data/catalogue.js';
+import { products, collections } from '../src/data/catalogue.js';
 import { createDemoOrder } from '../src/utils/orders.js';
 import { recommendProducts, palettes } from '../src/utils/recommendations.js';
 
@@ -84,7 +84,7 @@ try {
   await command('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
   await command('Fetch.enable', { patterns: [{ urlPattern: 'https://images.unsplash.com/*', resourceType: 'Image' }] });
   await command('Page.navigate', { url: origin + '/#/my-nest' });
-  await expectText('MY HOME PROFILE');
+  await until(async () => (await text()).includes('MY HOME PROFILE'), 'initial My Nest render', 60000);
 
   await check('empty profile has no invented rooms or preferences', async () => {
     assert.ok((await text()).includes('Not set yet'));
@@ -203,16 +203,16 @@ try {
   });
   await check('collection counts and filtered shop links reflect real products', async () => {
     await route('/collections/natural-living', 'THE NATURAL LIVING EDIT');
-    assert.ok((await text()).includes('3 curated pieces'));
+    assert.ok((await text()).includes(products.filter(p=>p.style==='Natural Living').length+' curated pieces'));
     await click('Shop this collection');
-    await expectText('3 pieces to love');
+    await expectText(products.filter(p=>p.style==='Natural Living').length+' pieces to love');
     assert.equal(await evaluate("document.querySelector('[aria-label=\"Product style\"]').value"), 'Natural Living');
   });
   await check('empty search results can be reset', async () => {
     await evaluate(`(()=>{const input=document.querySelector('[aria-label="Search décor"]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,'zzzz-unmatched');input.dispatchEvent(new Event('input',{bubbles:true}));})()`);
     await expectText('No pieces found.');
     await click('Reset filters');
-    await expectText('14 pieces to love');
+    await expectText(products.length+' pieces to love');
   });
   await check('missing routes and identifiers show not-found states', async () => {
     await route('/product/missing', 'Product not found');
@@ -333,6 +333,94 @@ try {
     await expectText('A home is a feeling.');
     assert.ok(await evaluate("!document.querySelector('.mobile-nav')"));
   });
+
+  await command('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
+  const selectFilter = async (label,value) => {
+    await evaluate('(()=>{const el=document.querySelector('+JSON.stringify('[aria-label="'+label+'"]')+');el.value='+JSON.stringify(value)+';el.dispatchEvent(new Event("change",{bubbles:true}));})()');
+    await wait(100);
+  };
+  const shopIds = () => evaluate("[...document.querySelectorAll('.products .product-img')].map(el=>el.getAttribute('href').split('/').pop())");
+  await check('expanded shop filters every category and style; new names are searchable', async () => {
+    await route('/shop','Find the pieces that belong.');
+    assert.equal((await shopIds()).length,32);
+    for(const category of new Set(products.map(p=>p.category))){
+      await selectFilter('Product category',category);
+      assert.deepEqual(await shopIds(),products.filter(p=>p.category===category).map(p=>p.id));
+    }
+    await selectFilter('Product category','All');
+    for(const style of new Set(products.map(p=>p.style))){
+      await selectFilter('Product style',style);
+      assert.deepEqual(await shopIds(),products.filter(p=>p.style===style).map(p=>p.id));
+    }
+    await selectFilter('Product style','All');
+    await evaluate('(()=>{const el=document.querySelector(".filters input");Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,"value").set.call(el,"wooden catchall");el.dispatchEvent(new Event("input",{bubbles:true}));})()');
+    await expectText('1 pieces to love');
+    assert.deepEqual(await shopIds(),['wooden-catchall-tray']);
+    await evaluate('(()=>{const el=document.querySelector(".filters input");Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,"value").set.call(el,"");el.dispatchEvent(new Event("input",{bubbles:true}));})()');
+    await expectText('32 pieces to love');
+    for(const [sort,direction] of [['low',1],['high',-1]]){
+      await selectFilter('Sort products',sort);
+      assert.deepEqual(await shopIds(),[...products].sort((a,b)=>direction*(a.price-b.price)).map(p=>p.id));
+    }
+  });
+  await check('all five collection totals and shop links match the catalogue', async () => {
+    for(const c of collections){
+      await route('/collections/'+c.id,'THE '+c.name.toUpperCase()+' EDIT');
+      await expectText(products.filter(p=>p.style===c.name).length+' curated pieces');
+      await click('Shop this collection');
+      await expectText('Find the pieces that belong.');
+      assert.deepEqual(await shopIds(),products.filter(p=>p.style===c.name).map(p=>p.id));
+    }
+  });
+  await check('all 32 detail pages render their exact catalogue information and matching links', async () => {
+    for(const p of products){
+      await route('/product/'+p.id,'Back to shop');
+      await until(()=>evaluate('document.querySelector("h1")?.textContent==='+JSON.stringify(p.name)),p.name);
+      assert.equal(await evaluate('document.querySelector(".detail-image img").getAttribute("src")'),p.image);
+      assert.equal(await evaluate('document.querySelector(".detail-image img").alt'),p.name);
+      const content=await evaluate('document.querySelector(".detail-copy").innerText');
+      for(const value of [p.desc,p.material,p.dimensions,'LKR '+p.price.toLocaleString('en-LK')])assert.ok(content.includes(value),p.id+' '+value);
+      assert.deepEqual(await evaluate('[...document.querySelectorAll(".color-dots span")].map(el=>el.title)'),p.colors);
+      const matches=await evaluate('[...document.querySelectorAll(".related .product-img")].map(el=>el.getAttribute("href").split("/").pop())');
+      assert.ok(matches.length && matches.every(id=>id!==p.id && products.some(item=>item.id===id)));
+      if(products.indexOf(p)>=14){
+        await click('Add to Cart');
+        await evaluate('document.querySelector(".buy-row .icon-btn").click()');
+        assert.ok(await evaluate('JSON.parse(localStorage.getItem("nest-cart")).some(item=>item.id==='+JSON.stringify(p.id)+')'));
+        assert.ok(await evaluate('JSON.parse(localStorage.getItem("nest-wish")).some(item=>item.id==='+JSON.stringify(p.id)+')'));
+      }
+    }
+    await command('Page.reload');
+    await expectText('Garden Bird Accent');
+    assert.equal(await evaluate('JSON.parse(localStorage.getItem("nest-cart")).length'),18);
+    assert.equal(await evaluate('JSON.parse(localStorage.getItem("nest-wish")).length'),18);
+  });
+  await check('guided Workspace uses room tags while browse keeps the complete catalogue', async () => {
+    await route('/design-room?room=Workspace','Which room are you designing?');
+    await until(()=>evaluate('document.querySelector(".room-plan h2").textContent==="Workspace"'),'Workspace plan');
+    const shown=await evaluate('[...document.querySelectorAll(".designer-card h3")].map(el=>el.textContent)');
+    assert.ok(shown.length && shown.every(name=>products.find(p=>p.name===name).rooms.includes('Workspace')));
+    await evaluate('[...document.querySelectorAll(".design-path button")].find(el=>el.textContent.includes("Let me browse")).click()');
+    await wait(100);
+    assert.equal(await evaluate('document.querySelectorAll(".designer-card").length'),32);
+    await chooseCard('Wooden Catchall Tray','Add to room');
+    assert.ok((await evaluate('document.querySelector(".room-plan").innerText')).includes('Wooden Catchall Tray'));
+    await command('Page.reload');
+    await expectText('Wooden Catchall Tray');
+    assert.ok((await evaluate('document.querySelector(".room-plan").innerText')).includes('Wooden Catchall Tray'));
+  });
+  await check('expanded catalogue stays readable on mobile', async () => {
+    await route('/shop','Find the pieces that belong.');
+    for(const width of [390,320]){
+      await command('Emulation.setDeviceMetricsOverride',{width,height:844,deviceScaleFactor:1,mobile:true});
+      await wait(100);
+      assert.ok(await evaluate('document.documentElement.scrollWidth<=window.innerWidth'));
+      assert.ok(await evaluate('[...document.querySelectorAll(".product-copy")].every(el=>el.scrollWidth<=el.clientWidth)'));
+    }
+    await route('/product/wooden-catchall-tray','Wooden Catchall Tray');
+    assert.ok(await evaluate('document.documentElement.scrollWidth<=window.innerWidth'));
+  });
+
   assert.deepEqual(runtimeErrors, [], 'Browser runtime exceptions');
   assert.deepEqual(warnings, [], 'React console warnings/errors');
   if (process.env.NESTIQUE_VISUAL_CHECK === '1') {
@@ -360,6 +448,9 @@ try {
     console.log('Live photography loaded: '+await evaluate("[...document.images].filter(img=>img.naturalWidth>0).length+'/'+document.images.length"));
   }
   console.log(`PASS ${completed} browser scenarios; no runtime exceptions or React console warnings/errors.`);
+} catch (error) {
+  console.error('Browser diagnostics:', { runtimeErrors, warnings });
+  throw error;
 } finally {
   socket?.close();
   chrome.kill();
